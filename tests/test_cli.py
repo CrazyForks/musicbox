@@ -31,7 +31,15 @@ class FakeNetEase:
                 }
             ]
         if dig_type == "artists":
-            return [{"artist_id": 1, "artist_name": "周杰伦"}]
+            return [{"artist_id": 1, "artists_name": "周杰伦"}]
+        if dig_type == "albums":
+            return [
+                {
+                    "album_id": 1,
+                    "albums_name": "范特西",
+                    "artists_name": "周杰伦",
+                }
+            ]
         if dig_type == "playlists":
             return [{"playlist_id": 1, "playlist_name": "测试歌单"}]
         return data
@@ -121,6 +129,19 @@ def test_search_quiet(monkeypatch, capsys):
     code = _run(monkeypatch, ["search", "周杰伦", "--quiet"])
     assert code == 0
     assert capsys.readouterr().out.strip() == "33894312"
+
+
+@pytest.mark.parametrize(
+    ("search_type", "expected"),
+    [
+        ("artist", "1\t周杰伦"),
+        ("album", "1\t范特西 — 周杰伦"),
+    ],
+)
+def test_search_human_output(monkeypatch, capsys, search_type, expected):
+    code = _run(monkeypatch, ["search", "周杰伦", "--type", search_type])
+    assert code == 0
+    assert capsys.readouterr().out.strip() == expected
 
 
 def test_song_info_human(monkeypatch, capsys):
