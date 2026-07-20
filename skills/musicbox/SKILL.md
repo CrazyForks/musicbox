@@ -111,7 +111,7 @@ musicbox download --album <album_id> --path ./music --json
 musicbox download --songs <id1> <id2> --path ./music --json
 ```
 
-每首歌曲下载为 `<artist> - <song>.mp3`，结果输出 JSON 数组，每项包含 `ok`/错误信息。
+每首歌曲下载为 `<artist>-<song>{ext}`，扩展名取决于音源（`.mp3` 或 `.flac`），结果输出 JSON 数组，每项包含 `ok`/错误信息。
 ## 输出约定
 
 - Agent 调用时**始终加 `--json`**，解析 stdout 的 `{ok, data}` 信封。

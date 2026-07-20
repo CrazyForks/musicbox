@@ -142,10 +142,6 @@ musicbox auth login --no-wait --json
 musicbox download --playlist 3778678 --path ./music --json
 ```
 
-```bash
-npx skills add darknessomi/musicbox -y
-```
-
 安装 Agent Skill 后，可直接让 Codex、Claude Code、Cursor 等 Agent 操作 MusicBox：
 
 ```bash

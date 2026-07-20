@@ -629,28 +629,30 @@ def cmd_play(api: NetEase, ctx: CliContext, ns: argparse.Namespace) -> int:
     if ns.artist is not None:
         raw = api.artists(ns.artist)
         if not raw:
-            return ctx.emit_err("api_error", f"歌手 {ns.artist} 没有歌曲为空")
+            return ctx.emit_err("api_error", f"歌手 {ns.artist} 没有歌曲")
         limit = ns.limit if ns.limit is not None else 20
-        songs = api.dig_info(raw[:limit], "songs") or []
-        ids = [s["song_id"] for s in songs if s.get("song_id")]
+        ids = [s["id"] for s in raw[:limit] if s.get("id")]
         if not ids:
             return ctx.emit_err("api_error", f"无法获取歌手 {ns.artist} 的歌曲信息")
     elif ns.album is not None:
         raw = api.album(ns.album)
         if not raw:
             return ctx.emit_err("api_error", f"专辑 {ns.album} 的歌曲为空")
-        if ns.limit is not None:
-            raw = raw[: ns.limit]
-        songs = api.dig_info(raw, "songs") or []
-        ids = [s["song_id"] for s in songs if s.get("song_id")]
+        ids = [s["id"] for s in raw if s.get("id")]
         if not ids:
             return ctx.emit_err("api_error", f"无法获取专辑 {ns.album} 的歌曲信息")
     elif ns.songs is not None:
         ids = list(ns.songs)
-        if ns.limit is not None:
-            ids = ids[: ns.limit]
     else:
         return _rpc(ctx, ns, "player.play", {}, human_fn=_format_status)
+
+    if getattr(ns, "dry_run", False):
+        preview = [
+            {"method": "queue.clear", "params": {}},
+            {"method": "queue.add", "params": {"ids": ids}},
+            {"method": "player.play", "params": {"index": 0}},
+        ]
+        return ctx.emit_ok(preview, json.dumps(preview, ensure_ascii=False))
 
     failed = _ensure_daemon(ctx, ns)
     if failed is not None:
@@ -661,15 +663,20 @@ def cmd_play(api: NetEase, ctx: CliContext, ns: argparse.Namespace) -> int:
         ("queue.add", {"ids": ids}),
     ]:
         try:
-            raw = send_request(method, params)
-        except ConnectionError as exc:
-            return ctx.emit_err("daemon_offline", str(exc))
-        if not raw.get("ok"):
-            err = raw.get("error", {})
+            resp = send_request(method, params)
+        except ConnectionError:
             return ctx.emit_err(
-                err.get("type", "rpc_error"),
-                err.get("message", str(raw)),
-                err.get("hint", ""),
+                "daemon_not_running",
+                "无法连接 daemon",
+                "musicbox daemon start",
+                exit_code=EXIT_DAEMON_NOT_RUNNING,
+            )
+        if not resp.get("ok"):
+            err = resp.get("error", {})
+            return ctx.emit_err(
+                err.get("type", "api_error"),
+                err.get("message", str(resp)),
+                exit_code=_ERROR_EXIT_CODES.get(err.get("type", ""), EXIT_GENERIC),
             )
     return _rpc(ctx, ns, "player.play", {"index": 0}, human_fn=_format_status)
 
@@ -685,8 +692,6 @@ def cmd_download(api: NetEase, ctx: CliContext, ns: argparse.Namespace) -> int:
         source_id = ns.artist
     elif ns.album is not None:
         raw = api.album(ns.album)
-        if limit is not None:
-            raw = raw[:limit]
         songs = api.dig_info(raw, "songs") or []
         source = "album"
         source_id = ns.album
@@ -773,6 +778,13 @@ def cmd_download(api: NetEase, ctx: CliContext, ns: argparse.Namespace) -> int:
                 )
             else:
                 print(f"  FAIL {song_name}: {e}")
+
+    if ok_count == 0:
+        return ctx.emit_err(
+            "download_failed",
+            "所有歌曲下载失败",
+            exit_code=EXIT_GENERIC,
+        )
 
     if ctx.json_mode:
         ok_total = sum(1 for r in results if r["ok"])
@@ -1239,29 +1251,32 @@ def _build_control_parsers(sub: Any) -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Examples:\n"
-            "  musicbox download --artist 6452 --path ./music\n"
-            "  musicbox download --album 32311 --limit 10 --json\n"
+            "  musicbox download --artist 6452 --limit 20 --path ./music\n"
+            "  musicbox download --album 32311\n"
             "  musicbox download --songs 33894312 28258988\n"
             "  musicbox download --playlist 12345"
         ),
     )
     _add_common_flags(p_download)
-    p_download.add_argument(
+    src = p_download.add_mutually_exclusive_group(required=True)
+    src.add_argument(
         "--artist", type=int, default=None, help="歌手 ID，下载该歌手热门歌曲"
     )
-    p_download.add_argument(
+    src.add_argument(
         "--album", type=int, default=None, help="专辑 ID，下载该专辑所有歌曲"
     )
-    p_download.add_argument(
+    src.add_argument(
         "--songs", type=int, nargs="+", default=None, help="歌曲 ID 列表，下载指定歌曲"
     )
-    p_download.add_argument(
+    src.add_argument(
         "--playlist", type=int, default=None, help="歌单 ID，下载该歌单中所有歌曲"
     )
     p_download.add_argument(
         "--path", type=str, default=".", help="目标目录（默认为当前目录）"
     )
-    p_download.add_argument("--limit", type=int, default=None, help="获取数量上限")
+    p_download.add_argument(
+        "--limit", type=int, default=None, help="获取数量上限（仅对 --artist 生效）"
+    )
     p_download.set_defaults(handler="download")
 
     p_play = sub.add_parser(
@@ -1277,20 +1292,22 @@ def _build_control_parsers(sub: Any) -> None:
         ),
     )
     _add_control_flags(p_play)
-    p_play.add_argument("--id", type=int, default=None, help="按歌曲 ID 播放")
-    p_play.add_argument("--playlist", type=int, default=None, help="按歌单 ID 播放")
-    p_play.add_argument("--index", type=int, default=None, help="播放队列中第 n 首")
-
-    p_play.add_argument(
+    src = p_play.add_mutually_exclusive_group()
+    src.add_argument("--id", type=int, default=None, help="按歌曲 ID 播放")
+    src.add_argument("--playlist", type=int, default=None, help="按歌单 ID 播放")
+    src.add_argument("--index", type=int, default=None, help="播放队列中第 n 首")
+    src.add_argument(
         "--artist", type=int, default=None, help="歌手 ID，播放该歌手热门歌曲"
     )
-    p_play.add_argument(
+    src.add_argument(
         "--album", type=int, default=None, help="专辑 ID，播放该专辑所有歌曲"
     )
-    p_play.add_argument(
+    src.add_argument(
         "--songs", type=int, nargs="+", default=None, help="歌曲 ID 列表，播放指定歌曲"
     )
-    p_play.add_argument("--limit", type=int, default=None, help="获取数量上限")
+    p_play.add_argument(
+        "--limit", type=int, default=None, help="获取数量上限（仅对 --artist 生效）"
+    )
     p_play.set_defaults(handler="play")
 
     # simple controls
